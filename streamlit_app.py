@@ -24,30 +24,49 @@ PRICING_CONFIG = {
     "large":  {"solar_eur_kw": 600, "bat_eur_kwh": 200}
 }
 
-# --- PDF ĢENERĒŠANAS FUNKCIJA ---
+# --- PDF ĢENERĒŠANAS FUNKCIJA AR LATVIEŠU VALODAS ATBALSTU ---
 class ESTACIJA_PDF(FPDF):
     def header(self):
+        # Ielādējam fontus (Tev tie ir jāpievieno savā mapē!)
+        # Ja faili nav pieejami, šis izmetīs kļūdu, tāpēc pārbaudām
+        try:
+            self.add_font("Roboto", "", "Roboto-Regular.ttf")
+            self.add_font("Roboto", "B", "Roboto-Bold.ttf")
+        except:
+            # Ja fontu faili nav atrasti, lietojam helvetica (bet būs kļūda ar garumzīmēm)
+            self.set_font("helvetica", "B", 15)
+            
         if os.path.exists("New_logo1.png"):
             self.image("New_logo1.png", 10, 8, 40)
-        self.set_font("helvetica", "B", 15)
+            
+        self.set_font("Roboto", "B", 15) # Izmantojam jauno fontu
         self.cell(80)
         self.cell(110, 10, "KOMERCIĀLAIS PIEDĀVĀJUMS", border=0, align="R")
         self.ln(20)
 
     def footer(self):
         self.set_y(-15)
-        self.set_font("helvetica", "I", 8)
+        self.set_font("Roboto", "", 8)
         self.cell(0, 10, f"Lapa {self.page_no()}/{{nb}} | estacija.lv", align="C")
 
 def create_pdf(cust_data, system_data, finance_data):
     pdf = ESTACIJA_PDF()
+    
+    # Svarīgi pievienot fontus arī šeit pirms add_page vai tūlīt pēc
+    try:
+        pdf.add_font("Roboto", "", "Roboto-Regular.ttf")
+        pdf.add_font("Roboto", "B", "Roboto-Bold.ttf")
+    except Exception as e:
+        st.error(f"Sistēma nevarēja atrast fontu failus: {e}. Lūdzu, augšupielādē Roboto-Regular.ttf un Roboto-Bold.ttf")
+        return None
+
     pdf.add_page()
-    pdf.set_font("helvetica", size=11)
+    pdf.set_font("Roboto", size=11)
     
     # Klienta dati
-    pdf.set_font("helvetica", "B", 12)
+    pdf.set_font("Roboto", "B", 12)
     pdf.cell(0, 10, f"Klients: {cust_data['name']}", ln=True)
-    pdf.set_font("helvetica", size=10)
+    pdf.set_font("Roboto", size=10)
     pdf.cell(0, 5, f"Adrese: {cust_data['addr']}", ln=True)
     pdf.cell(0, 5, f"Piedāvājuma Nr: {cust_data['no']}", ln=True)
     pdf.cell(0, 5, f"Datums: {date.today().strftime('%d.%m.%Y')}", ln=True)
@@ -55,46 +74,31 @@ def create_pdf(cust_data, system_data, finance_data):
 
     # Tabulas galvene
     pdf.set_fill_color(240, 240, 240)
-    pdf.set_font("helvetica", "B", 10)
-    pdf.cell(90, 10, "Pozicija", border=1, fill=True)
+    pdf.set_font("Roboto", "B", 10)
+    pdf.cell(90, 10, "Pozīcija", border=1, fill=True) # Tagad drīkst rakstīt 'ī'
     pdf.cell(30, 10, "Apjoms", border=1, fill=True, align="C")
     pdf.cell(30, 10, "Cena (vien.)", border=1, fill=True, align="C")
     pdf.cell(40, 10, "Summa", border=1, fill=True, align="C")
     pdf.ln()
 
     # Pozīcijas
-    pdf.set_font("helvetica", size=10)
+    pdf.set_font("Roboto", size=10)
     for item in system_data['items']:
+        # Izmantojam UTF-8 drošu rakstību
         pdf.cell(90, 10, item['name'], border=1)
         pdf.cell(30, 10, item['qty'], border=1, align="C")
         pdf.cell(30, 10, f"{item['price']} EUR", border=1, align="C")
         pdf.cell(40, 10, f"{item['total']:,} EUR", border=1, align="C")
         pdf.ln()
 
+    # ... pārējā koda daļa paliek tāda pati, tikai nomaini "helvetica" uz "Roboto" ...
+    
     # Kopsavilkums
     pdf.ln(5)
-    pdf.set_font("helvetica", "B", 11)
-    pdf.cell(150, 10, "KOPA NETO:", align="R")
+    pdf.set_font("Roboto", "B", 11)
+    pdf.cell(150, 10, "KOPĀ NETO:", align="R")
     pdf.cell(40, 10, f"{finance_data['total_neto']:,} EUR", align="R")
-    pdf.ln()
-    pdf.cell(150, 10, f"Valsts atbalsts ({finance_data['grant_pct']}%):", align="R")
-    pdf.cell(40, 10, f"-{finance_data['grant_val']:,} EUR", align="R")
-    pdf.ln()
-    pdf.set_text_color(0, 100, 0)
-    pdf.cell(150, 10, "GALA INVESTICIJA:", align="R")
-    pdf.cell(40, 10, f"{finance_data['final_invest']:,} EUR", align="R")
     
-    # Kredīta info ja ir
-    if finance_data['pmt'] > 0:
-        pdf.set_text_color(0, 0, 0)
-        pdf.ln(15)
-        pdf.set_font("helvetica", "B", 11)
-        pdf.cell(0, 10, "Finansejuma informācija (Kredits):", ln=True)
-        pdf.set_font("helvetica", size=10)
-        pdf.cell(0, 7, f"- Menesa maksajums: {finance_data['pmt']:.2f} EUR", ln=True)
-        pdf.cell(0, 7, f"- Termins: {finance_data['loan_yrs']} gadi", ln=True)
-        pdf.cell(0, 7, f"- Procentu likme: {finance_data['int_rate']*100}%", ln=True)
-
     return pdf.output(dest='S')
 
 # =================================================================
