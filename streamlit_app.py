@@ -5,16 +5,17 @@ from datetime import date
 from fpdf import FPDF
 
 # =================================================================
-# ⚙️ 1. KONFIGURĀCIJA UN CENAS
+# ⚙️ 1. KONFIGURĀCIJA
 # =================================================================
 TECHNICAL_PARAMS = {
     "solar_yield": 1050,      
     "grid_fee_save": 0.045,   
     "bat_cycles": 300,        
-    "arb_spread": 0.10,       
     "bat_eff": 0.88,          
     "degradation": 0.005,     
-    "elec_inflation": 0.03    
+    "elec_inflation": 0.03,
+    "nordpool_avg": 0.09,     # Vidējā NordPool cena
+    "nordpool_spread": 0.12   # Starpība starp lētāko/dārgāko stundu baterijām
 }
 
 PRICING_CONFIG = {
@@ -25,213 +26,134 @@ PRICING_CONFIG = {
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# =================================================================
-# 📄 2. PDF KLASES DEFINĪCIJA (Ar paplašinātu informāciju)
-# =================================================================
 class EstacijaPDF(FPDF):
     def __init__(self):
         super().__init__()
         reg_path = os.path.join(BASE_DIR, "Roboto-Regular.ttf")
         bold_path = os.path.join(BASE_DIR, "Roboto-Bold.ttf")
-        
         if os.path.exists(reg_path) and os.path.exists(bold_path):
             self.add_font("Roboto", "", reg_path)
             self.add_font("Roboto", "B", bold_path)
             self.font_family_name = "Roboto"
-        else:
-            self.font_family_name = "helvetica"
+        else: self.font_family_name = "helvetica"
 
     def header(self):
         logo_path = os.path.join(BASE_DIR, "New_logo1.png")
-        if os.path.exists(logo_path):
-            self.image(logo_path, 10, 8, 35)
+        if os.path.exists(logo_path): self.image(logo_path, 10, 8, 35)
         self.set_font(self.font_family_name, "B", 14)
-        self.cell(0, 10, "PROJEKTA ROI UN TEHNISKAIS PAMATOJUMS", border=0, align="R")
+        self.cell(0, 10, "TEHNISKI-EKONOMISKAIS PAMATOJUMS", border=0, align="R")
         self.ln(20)
 
-    def section_title(self, label):
-        self.set_font(self.font_family_name, "B", 12)
-        self.set_fill_color(240, 240, 240)
-        self.cell(0, 10, f" {label}", 0, 1, "L", True)
-        self.ln(2)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font(self.font_family_name, "", 8)
-        self.cell(0, 10, f"Lapa {self.page_no()}/{{nb}} | estacija.lv", align="C")
-
 # =================================================================
-# 🖥️ 3. STREAMLIT LIETOTNES SASKARNE
+# 🖥️ 2. UI UN IEVADE
 # =================================================================
-st.set_page_config(page_title="ESTACIJA Piedāvājumu Sistēma", layout="wide")
-
-logo_ui = os.path.join(BASE_DIR, "New_logo1.png")
-if os.path.exists(logo_ui):
-    st.image(logo_ui, width=200)
-
-st.title("Piedāvājuma un ROI Aprēķinu Sistēma")
+st.set_page_config(page_title="ESTACIJA NordPool Calc", layout="wide")
 
 with st.sidebar:
     st.header("👤 Klienta dati")
-    c_name = st.text_input("Klients", "SIA Klienta Uzņēmums")
-    c_addr = st.text_input("Adrese", "Rīga, Latvija")
-    c_bill = st.number_input("Esošais mēneša rēķins (€ bez PVN)", value=300.0)
-    c_price_kwh = st.number_input("Elektrības cena (€/kWh)", value=0.16, step=0.01)
+    c_name = st.text_input("Klients", "SIA Uzņēmums")
+    c_bill = st.number_input("Mēneša rēķins (€ bez PVN)", value=400.0)
     
+    st.divider()
+    st.header("⚡ Elektroenerģijas tarifs")
+    pricing_type = st.radio("Tarifa veids", ["Fiksēta cena", "Nord Pool (Biržas cena)"])
+    
+    if pricing_type == "Fiksēta cena":
+        c_price = st.number_input("Cena (€/kWh)", value=0.16)
+        bat_spread = 0.08 # Mazāks spreads fiksētai cenai (tikai pašpatēriņš)
+    else:
+        c_price = TECHNICAL_PARAMS["nordpool_avg"]
+        bat_spread = TECHNICAL_PARAMS["nordpool_spread"]
+        st.info(f"Nord Pool aprēķinā izmantota vidējā cena {c_price} €/kWh un arbitrāžas potenciāls {bat_spread} €/kWh.")
+
     st.divider()
     st.header("🏦 Finansējums")
     is_loan = st.checkbox("Iekļaut kredītu", value=True)
-    loan_rate = st.slider("Likme (%)", 1.9, 12.0, 1.9) / 100
-    loan_years = st.select_slider("Termiņš (Gadi)", options=list(range(1, 11)), value=5)
+    loan_rate = 0.019 # 1.9%
+    loan_years = 5
     grant_pct = st.slider("Valsts atbalsts (%)", 0, 50, 30) / 100
 
-st.subheader("🛠️ Sistēmas Konfigurācija")
+# Sistēmas konfigurācija
+st.subheader("🛠️ Konfigurācija")
 col1, col2, col3 = st.columns(3)
-
 with col1:
-    scenario = st.selectbox("Izvēlētais modelis", [
-        "Saules paneļi + Baterijas", 
-        "Tikai Saules paneļi", 
-        "Tikai Baterijas", 
-        "Bateriju pievienošana esošai sistēmai"
-    ])
+    scenario = st.selectbox("Modelis", ["Saule + Baterijas", "Tikai Saule", "Tikai Baterijas", "Baterijas esošai Saulei"])
 with col2:
-    new_kw = st.number_input("Jaunā Saules jauda (kW)", min_value=0.0, value=10.0 if "Saules" in scenario else 0.0)
-    exist_kw = st.number_input("Esošā Saules jauda (kW)", min_value=0.0, value=0.0) if "esošai" in scenario else 0.0
+    new_kw = st.number_input("Jauna Saule (kW)", value=10.0 if "Saule" in scenario else 0.0)
+    exist_kw = st.number_input("Esoša Saule (kW)", value=0.0) if "esošai" in scenario else 0.0
 with col3:
-    bat_kwh = st.number_input("Bateriju ietilpība (kWh)", min_value=0.0, value=20.0 if "Baterija" in scenario or "Bateriju" in scenario else 0.0)
+    bat_kwh = st.number_input("Baterijas (kWh)", value=20.0 if "Baterija" in scenario or "Baterijas" in scenario else 0.0)
 
 # =================================================================
-# 🧮 4. APRĒĶINU LOĢIKA
+# 🧮 3. APRĒĶINI (Salīdzinājums)
 # =================================================================
-calc_tier_kw = new_kw if new_kw > 0 else (bat_kwh / 2)
-if calc_tier_kw < PRICING_CONFIG["small"]["max_kw"]: tier = "small"
-elif calc_tier_kw < PRICING_CONFIG["medium"]["max_kw"]: tier = "medium"
-else: tier = "large"
+# Kopējās izmaksas
+tier_kw = new_kw if new_kw > 0 else (bat_kwh / 2)
+tier = "small" if tier_kw < 20 else ("medium" if tier_kw < 50 else "large")
+total_neto = (new_kw * PRICING_CONFIG[tier]["solar_eur_kw"]) + (bat_kwh * PRICING_CONFIG[tier]["bat_eur_kwh"])
+net_invest = total_neto * (1 - grant_pct)
 
-s_u = PRICING_CONFIG[tier]["solar_eur_kw"]
-b_u = PRICING_CONFIG[tier]["bat_eur_kwh"]
+# Kredīts
+r = loan_rate / 12
+n = loan_years * 12
+pmt = net_invest * (r * (1+r)**n) / ((1+r)**n - 1) if is_loan else 0
 
-inv_s = new_kw * s_u
-inv_b = bat_kwh * b_u
-total_neto = inv_s + inv_b
-grant_val = total_neto * grant_pct
-net_invest = total_neto - grant_val
+# IETAUPĪJUMA SALĪDZINĀJUMS
+def calc_savings(p_price, p_spread):
+    s_save = (new_kw + exist_kw) * 1050 * (p_price + 0.045)
+    b_save = bat_kwh * 300 * p_spread * 0.88
+    return (s_save + b_save) / 12
 
-# Detalizēts ietaupījums
-solar_gen_ann = (new_kw + exist_kw) * TECHNICAL_PARAMS["solar_yield"]
-solar_save_ann = solar_gen_ann * (c_price_kwh + TECHNICAL_PARAMS["grid_fee_save"])
-bat_save_ann = bat_kwh * TECHNICAL_PARAMS["bat_cycles"] * TECHNICAL_PARAMS["arb_spread"] * TECHNICAL_PARAMS["bat_eff"]
-total_save_ann = solar_save_ann + bat_save_ann
-monthly_save = total_save_ann / 12
+m_save_fixed = calc_savings(0.16, 0.08)
+m_save_nord = calc_savings(TECHNICAL_PARAMS["nordpool_avg"], TECHNICAL_PARAMS["nordpool_spread"])
 
-pmt = 0
-if is_loan and net_invest > 0:
-    r = loan_rate / 12
-    n = loan_years * 12
-    pmt = net_invest * (r * (1+r)**n) / ((1+r)**n - 1)
+current_m_save = m_save_nord if pricing_type == "Nord Pool (Biržas cena)" else m_save_fixed
 
 # =================================================================
-# 📊 5. REZULTĀTI UN PDF ĢENERĒŠANA
+# 📊 4. REZULTĀTI
 # =================================================================
-t1, t2 = st.tabs(["📋 Piedāvājuma kopsavilkums", "📈 ROI Grafiks"])
+st.divider()
+st.subheader("📈 Ekonomiskais salīdzinājums")
 
-with t1:
-    st.success(f"**Tīrais mēneša Cash-flow: {monthly_save - pmt:,.2f} €**")
+res_col1, res_col2 = st.columns(2)
+with res_col1:
+    st.markdown("#### Fiksēta cena (0.16 €/kWh)")
+    st.write(f"Mēneša ietaupījums: **{m_save_fixed:,.2f} €**")
+    st.write(f"Neto Cash-flow: **{m_save_fixed - pmt:,.2f} €/mēn**")
+
+with res_col2:
+    st.markdown("#### Nord Pool (Biržas cena)")
+    st.write(f"Mēneša ietaupījums: **{m_save_nord:,.2f} €**")
+    st.write(f"Neto Cash-flow: **{m_save_nord - pmt:,.2f} €/mēn**")
+
+
+
+# --- PDF ĢENERĒŠANA ---
+if st.button("Sagatavot PDF ar salīdzinājumu"):
+    pdf = EstacijaPDF()
+    pdf.add_page()
+    pdf.set_font("Roboto", "B", 12)
+    pdf.cell(0, 10, f"Klients: {c_name}", ln=True)
+    pdf.ln(5)
     
-    def generate_detailed_pdf():
-        pdf = EstacijaPDF()
-        pdf.add_page()
-        
-        # 1. Klienta un Ievades dati
-        pdf.section_title("1. KLIENTA UN ENERĢIJAS DATI")
-        pdf.set_font(pdf.font_family_name, "", 10)
-        pdf.cell(100, 7, f"Klients: {c_name}")
-        pdf.cell(0, 7, f"Esošais rēķins: {c_bill:,.2f} EUR/mēn", ln=True)
-        pdf.cell(100, 7, f"Adrese: {c_addr}")
-        pdf.cell(0, 7, f"Elektrības cena: {c_price_kwh} EUR/kWh", ln=True)
-        pdf.ln(5)
-
-        # 2. Tehniskie pieņēmumi
-        pdf.section_title("2. TEHNISKIE PIEŅĒMUMI")
-        pdf.set_font(pdf.font_family_name, "", 9)
-        pdf.cell(95, 6, f"- Saules ražība: {TECHNICAL_PARAMS['solar_yield']} kWh/kWp gadā")
-        pdf.cell(0, 6, f"- Sadales tīkla ietaupījums: {TECHNICAL_PARAMS['grid_fee_save']} EUR/kWh", ln=True)
-        pdf.cell(95, 6, f"- Bateriju cikli: {TECHNICAL_PARAMS['bat_cycles']} reizes gadā")
-        pdf.cell(0, 6, f"- Arbitrāžas peļņa: {TECHNICAL_PARAMS['arb_spread']} EUR/kWh", ln=True)
-        pdf.cell(95, 6, f"- Bateriju lietderība: {TECHNICAL_PARAMS['bat_eff']*100}%")
-        pdf.cell(0, 6, f"- Sistēmas nolietojums: {TECHNICAL_PARAMS['degradation']*100}% gadā", ln=True)
-        pdf.ln(5)
-
-        # 3. Sistēmas specifikācija un Izmaksas
-        pdf.section_title("3. SISTĒMAS SPECIFIKĀCIJA UN INVESTĪCIJA")
-        pdf.set_font(pdf.font_family_name, "B", 10)
-        pdf.cell(90, 8, "Pozīcija", 1, 0, "L")
-        pdf.cell(30, 8, "Daudzums", 1, 0, "C")
-        pdf.cell(35, 8, "Vien. cena", 1, 0, "C")
-        pdf.cell(35, 8, "Summa", 1, 1, "C")
-        
-        pdf.set_font(pdf.font_family_name, "", 10)
-        if new_kw > 0:
-            pdf.cell(90, 8, "Saules paneļu sistēma", 1)
-            pdf.cell(30, 8, f"{new_kw} kW", 1, 0, "C")
-            pdf.cell(35, 8, f"{s_u} EUR", 1, 0, "C")
-            pdf.cell(35, 8, f"{inv_s:,.2f} EUR", 1, 1, "C")
-        if bat_kwh > 0:
-            pdf.cell(90, 8, "Bateriju krātuve", 1)
-            pdf.cell(30, 8, f"{bat_kwh} kWh", 1, 0, "C")
-            pdf.cell(35, 8, f"{b_u} EUR", 1, 0, "C")
-            pdf.cell(35, 8, f"{inv_b:,.2f} EUR", 1, 1, "C")
-        
-        pdf.ln(2)
-        pdf.set_font(pdf.font_family_name, "B", 10)
-        pdf.cell(155, 8, "KOPĀ NETO:", 0, 0, "R")
-        pdf.cell(35, 8, f"{total_neto:,.2f} EUR", 0, 1, "R")
-        pdf.cell(155, 8, f"Valsts atbalsts ({int(grant_pct*100)}%):", 0, 0, "R")
-        pdf.cell(35, 8, f"-{grant_val:,.2f} EUR", 0, 1, "R")
-        pdf.cell(155, 8, "GALA INVESTĪCIJA:", 0, 0, "R")
-        pdf.cell(35, 8, f"{net_invest:,.2f} EUR", 0, 1, "R")
-        pdf.ln(5)
-
-        # 4. ROI Aprēķins
-        pdf.section_title("4. FINANŠU IEGUVUMA APRĒĶINS")
-        pdf.set_font(pdf.font_family_name, "", 10)
-        pdf.cell(0, 7, f"- Plānotā saules ražošana gadā: {solar_gen_ann:,.0f} kWh", ln=True)
-        pdf.cell(0, 7, f"- Saules radītais ietaupījums: {solar_save_ann:,.2f} EUR/gadā", ln=True)
-        pdf.cell(0, 7, f"- Bateriju arbitrāžas ieguvums: {bat_save_ann:,.2f} EUR/gadā", ln=True)
-        pdf.set_font(pdf.font_family_name, "B", 10)
-        pdf.cell(0, 10, f"KOPĒJAIS IETAUPĪJUMS 1. GADĀ: {total_save_ann:,.2f} EUR ({monthly_save:,.2f} EUR/mēn)", ln=True)
-        
-        if is_loan:
-            pdf.ln(2)
-            pdf.cell(0, 7, "FINANSĒJUMA MODELIS (KREDĪTS):", ln=True)
-            pdf.set_font(pdf.font_family_name, "", 10)
-            pdf.cell(0, 6, f"- Kredīta summa: {net_invest:,.2f} EUR", ln=True)
-            pdf.cell(0, 6, f"- Procentu likme: {loan_rate*100}% | Termiņš: {loan_years} gadi", ln=True)
-            pdf.cell(0, 6, f"- Ikmēneša maksājums: {pmt:,.2f} EUR", ln=True)
-            pdf.set_font(pdf.font_family_name, "B", 10)
-            pdf.cell(0, 10, f"TĪRAIS MĒNEŠA IEGUVUMS (Cash-flow): {monthly_save - pmt:,.2f} EUR", ln=True)
-
-        return pdf.output()
-
-    if st.button("Sagatavot pilno PDF atskaiti"):
-        pdf_bytes = generate_detailed_pdf()
-        st.download_button(
-            label="📥 Lejupielādēt detalizētu PDF",
-            data=bytes(pdf_bytes),
-            file_name=f"ESTACIJA_Pamatojums_{c_name.replace(' ', '_')}.pdf",
-            mime="application/pdf"
-        )
-
-with t2:
-    # ROI Grafika loģika (Kā iepriekšējā kodā)
-    years = np.arange(21)
-    history = []
-    curr_bal = -net_invest if not is_loan else 0
-    for y in years:
-        if y > 0:
-            y_save = (total_save_ann) * ((1 + TECHNICAL_PARAMS["elec_inflation"])**y) * ((1 - TECHNICAL_PARAMS["degradation"])**y)
-            y_loan = (pmt * 12) if (is_loan and y <= loan_years) else 0
-            curr_bal += (y_save - y_loan)
-        history.append(curr_bal)
-    st.area_chart(history)
+    # Salīdzinājuma tabula PDF failā
+    pdf.set_fill_color(240, 240, 240)
+    pdf.cell(80, 10, "Parametrs", 1, 0, "L", True)
+    pdf.cell(55, 10, "Fiksēts tarifs", 1, 0, "C", True)
+    pdf.cell(55, 10, "Nord Pool tarifs", 1, 1, "C", True)
+    
+    pdf.set_font("Roboto", "", 10)
+    pdf.cell(80, 10, "Mēneša ietaupījums", 1)
+    pdf.cell(55, 10, f"{m_save_fixed:,.2f} EUR", 1, 0, "C")
+    pdf.cell(55, 10, f"{m_save_nord:,.2f} EUR", 1, 1, "C")
+    
+    pdf.cell(80, 10, "Kredīta maksājums", 1)
+    pdf.cell(55, 10, f"{pmt:,.2f} EUR", 1, 0, "C")
+    pdf.cell(55, 10, f"{pmt:,.2f} EUR", 1, 1, "C")
+    
+    pdf.set_font("Roboto", "B", 10)
+    pdf.cell(80, 10, "TĪRAIS IEGUVUMS (mēn)", 1)
+    pdf.cell(55, 10, f"{m_save_fixed - pmt:,.2f} EUR", 1, 0, "C")
+    pdf.cell(55, 10, f"{m_save_nord - pmt:,.2f} EUR", 1, 1, "C")
+    
+    st.download_button("Lejupielādēt PDF", data=bytes(pdf.output()), file_name="Estacija_NordPool_Compare.pdf")
