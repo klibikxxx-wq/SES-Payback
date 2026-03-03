@@ -1,6 +1,7 @@
 import streamlit as st
 import numpy as np
 import os
+import matplotlib.pyplot as plt
 from datetime import date
 from fpdf import FPDF
 
@@ -8,13 +9,13 @@ from fpdf import FPDF
 # ⚙️ 1. KONFIGURĀCIJA UN CENAS
 # =================================================================
 TECHNICAL_PARAMS = {
-    "solar_yield": 850,      
-    "grid_fee_save": 0.045,   
-    "bat_cycles": 365,        
-    "arb_spread": 0.10,       
-    "bat_eff": 0.88,          
-    "degradation": 0.005,     
-    "elec_inflation": 0.03    
+    "solar_yield": 850,       # kWh saražotie gadā uz 1kW jaudu
+    "grid_fee_save": 0.045,   # Sadales tīkla ietaupījums (EUR/kWh)
+    "bat_cycles": 365,        # Bateriju cikli gadā
+    "arb_spread": 0.10,       # Arbitrāžas peļņa no baterijām (EUR/kWh)
+    "bat_eff": 0.88,          # Bateriju lietderības koeficients (88%)
+    "degradation": 0.005,     # Sistēmas nolietojums (0.5% gadā)
+    "elec_inflation": 0.03    # Elektrības cenas inflācija (3% gadā)
 }
 
 PRICING_CONFIG = {
@@ -26,7 +27,7 @@ PRICING_CONFIG = {
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # =================================================================
-# 📄 2. PDF KLASES DEFINĪCIJA (Ar paplašinātu informāciju)
+# 📄 2. PDF KLASES DEFINĪCIJA (Ar latviešu valodas atbalstu)
 # =================================================================
 class EstacijaPDF(FPDF):
     def __init__(self):
@@ -79,6 +80,11 @@ with st.sidebar:
     c_price_kwh = st.number_input("Elektrības cena (€/kWh)", value=0.16, step=0.01)
     
     st.divider()
+    st.header("⚡ Pašpatēriņa profils")
+    st.caption("Norāda, cik % no saules saražotā uzņēmums patērēs uz vietas, atlikumu pārdodot tīklā.")
+    self_cons_pct = st.slider("Pašpatēriņa proporcija (%)", 0, 100, 70) / 100
+    
+    st.divider()
     st.header("🏦 Finansējums")
     is_loan = st.checkbox("Iekļaut kredītu", value=True)
     loan_rate = st.slider("Likme (%)", 1.9, 12.0, 1.9) / 100
@@ -102,7 +108,7 @@ with col3:
     bat_kwh = st.number_input("Bateriju ietilpība (kWh)", min_value=0.0, value=20.0 if "Baterija" in scenario or "Bateriju" in scenario else 0.0)
 
 # =================================================================
-# 🧮 4. APRĒĶINU LOĢIKA
+# 🧮 4. APRĒĶINU LOĢIKA (Koriģēta ar Neto norēķiniem)
 # =================================================================
 calc_tier_kw = new_kw if new_kw > 0 else (bat_kwh / 2)
 if calc_tier_kw < PRICING_CONFIG["small"]["max_kw"]: tier = "small"
@@ -118,13 +124,22 @@ total_neto = inv_s + inv_b
 grant_val = total_neto * grant_pct
 net_invest = total_neto - grant_val
 
-# Detalizēts ietaupījums
+# 1. Jaudas un proporciju aprēķins
 solar_gen_ann = (new_kw + exist_kw) * TECHNICAL_PARAMS["solar_yield"]
-solar_save_ann = solar_gen_ann * (c_price_kwh + TECHNICAL_PARAMS["grid_fee_save"])
+solar_self = solar_gen_ann * self_cons_pct
+solar_export = solar_gen_ann * (1 - self_cons_pct)
+
+# 2. Naudas aprēķins (Pašpatēriņš ietaupa tīklu, Eksports pelna tikai biržas/tarifa cenu)
+save_solar_self = solar_self * (c_price_kwh + TECHNICAL_PARAMS["grid_fee_save"])
+save_solar_export = solar_export * c_price_kwh
+solar_save_ann = save_solar_self + save_solar_export
+
+# 3. Bateriju aprēķins
 bat_save_ann = bat_kwh * TECHNICAL_PARAMS["bat_cycles"] * TECHNICAL_PARAMS["arb_spread"] * TECHNICAL_PARAMS["bat_eff"]
 total_save_ann = solar_save_ann + bat_save_ann
 monthly_save = total_save_ann / 12
 
+# 4. Kredīts
 pmt = 0
 if is_loan and net_invest > 0:
     r = loan_rate / 12
@@ -134,7 +149,7 @@ if is_loan and net_invest > 0:
 # =================================================================
 # 📊 5. REZULTĀTI UN PDF ĢENERĒŠANA
 # =================================================================
-t1, t2 = st.tabs(["📋 Piedāvājuma kopsavilkums", "📈 ROI Grafiks"])
+t1, t2 = st.tabs(["📋 Piedāvājuma kopsavilkums", "📈 Interaktīvais ROI Grafiks"])
 
 with t1:
     st.success(f"**Tīrais mēneša Cash-flow: {monthly_save - pmt:,.2f} €**")
@@ -197,7 +212,10 @@ with t1:
         pdf.section_title("4. FINANŠU IEGUVUMA APRĒĶINS")
         pdf.set_font(pdf.font_family_name, "", 10)
         pdf.cell(0, 7, f"- Plānotā saules ražošana gadā: {solar_gen_ann:,.0f} kWh", ln=True)
-        pdf.cell(0, 7, f"- Saules radītais ietaupījums: {solar_save_ann:,.2f} EUR/gadā", ln=True)
+        pdf.cell(0, 7, f"   > Pašpatēriņš ({int(self_cons_pct*100)}%): {solar_self:,.0f} kWh", ln=True)
+        pdf.cell(0, 7, f"   > Tīklā nodots ({int((1-self_cons_pct)*100)}%): {solar_export:,.0f} kWh", ln=True)
+        pdf.cell(0, 7, f"- Ietaupījums no pašpatēriņa: {save_solar_self:,.2f} EUR/gadā", ln=True)
+        pdf.cell(0, 7, f"- Ieņēmumi no eksporta tīklā: {save_solar_export:,.2f} EUR/gadā", ln=True)
         pdf.cell(0, 7, f"- Bateriju arbitrāžas ieguvums: {bat_save_ann:,.2f} EUR/gadā", ln=True)
         pdf.set_font(pdf.font_family_name, "B", 10)
         pdf.cell(0, 10, f"KOPĒJAIS IETAUPĪJUMS 1. GADĀ: {total_save_ann:,.2f} EUR ({monthly_save:,.2f} EUR/mēn)", ln=True)
@@ -212,19 +230,54 @@ with t1:
             pdf.set_font(pdf.font_family_name, "B", 10)
             pdf.cell(0, 10, f"TĪRAIS MĒNEŠA IEGUVUMS (Cash-flow): {monthly_save - pmt:,.2f} EUR", ln=True)
 
+        # 5. ROI GRAFIKS PDF FAILĀ
+        pdf.add_page()
+        pdf.section_title("5. KUMULATĪVĀ NAUDAS PLŪSMA (20 GADI)")
+        
+        # Ģenerējam grafiku bildē, izmantojot matplotlib
+        years_arr = np.arange(21)
+        history_arr = []
+        curr_bal = -net_invest if not is_loan else 0
+        for y in years_arr:
+            if y > 0:
+                y_save = (total_save_ann) * ((1 + TECHNICAL_PARAMS["elec_inflation"])**y) * ((1 - TECHNICAL_PARAMS["degradation"])**y)
+                y_loan = (pmt * 12) if (is_loan and y <= loan_years) else 0
+                curr_bal += (y_save - y_loan)
+            history_arr.append(curr_bal)
+
+        # Zīmējam
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(years_arr, history_arr, color="#FF4B4B", linewidth=2.5)
+        ax.fill_between(years_arr, history_arr, 0, color="#FF4B4B", alpha=0.2)
+        ax.axhline(0, color="black", linewidth=1.5, linestyle="--")
+        ax.set_title(f"Sistēmas tīrā peļņa 20 gadu laikā: {history_arr[-1]:,.0f} EUR", fontsize=14, fontweight='bold')
+        ax.set_xlabel("Gads", fontsize=12)
+        ax.set_ylabel("Kopējā Naudas Plūsma (EUR)", fontsize=12)
+        ax.grid(True, linestyle=":", alpha=0.7)
+        plt.tight_layout()
+        
+        # Saglabājam pagaidu bildi un iešujam PDF
+        temp_img = os.path.join(BASE_DIR, "temp_roi_chart.png")
+        plt.savefig(temp_img, format="png", dpi=300)
+        plt.close(fig)
+        
+        pdf.image(temp_img, x=10, w=190)
+        os.remove(temp_img) # Izdzēšam failu, lai neaizņem vietu
+
         return pdf.output()
 
-    if st.button("Sagatavot pilno PDF atskaiti"):
-        pdf_bytes = generate_detailed_pdf()
-        st.download_button(
-            label="📥 Lejupielādēt detalizētu PDF",
-            data=bytes(pdf_bytes),
-            file_name=f"ESTACIJA_Pamatojums_{c_name.replace(' ', '_')}.pdf",
-            mime="application/pdf"
-        )
+    if st.button("Sagatavot pilno PDF atskaiti (ar grafiku)"):
+        with st.spinner('Ģenerējam PDF un zīmējam grafikus...'):
+            pdf_bytes = generate_detailed_pdf()
+            st.download_button(
+                label="📥 Lejupielādēt detalizētu PDF",
+                data=bytes(pdf_bytes),
+                file_name=f"ESTACIJA_Pamatojums_{c_name.replace(' ', '_')}.pdf",
+                mime="application/pdf"
+            )
 
 with t2:
-    # ROI Grafika loģika (Kā iepriekšējā kodā)
+    # Grafiks interaktīvai aplūkošanai pašā lietotnē
     years = np.arange(21)
     history = []
     curr_bal = -net_invest if not is_loan else 0
@@ -234,4 +287,5 @@ with t2:
             y_loan = (pmt * 12) if (is_loan and y <= loan_years) else 0
             curr_bal += (y_save - y_loan)
         history.append(curr_bal)
+    
     st.area_chart(history)
