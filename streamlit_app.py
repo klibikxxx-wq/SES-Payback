@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 from datetime import date
-from fpdf import FPDF
+from fpdf2 import FPDF
 import base64
 import os
 
@@ -26,38 +26,49 @@ PRICING_CONFIG = {
 
 # --- PDF ĢENERĒŠANAS FUNKCIJA AR LATVIEŠU VALODAS ATBALSTU ---
 class ESTACIJA_PDF(FPDF):
+    def __init__(self):
+        super().__init__()
+        # Pievienojam fontus uzreiz pie inicializācijas
+        self.reg_font_path = os.path.join(BASE_DIR, "Roboto-Regular.ttf")
+        self.bold_font_path = os.path.join(BASE_DIR, "Roboto-Bold.ttf")
+        
+        # Pārbaudām vai faili eksistē pirms pievienošanas
+        if os.path.exists(self.reg_font_path) and os.path.exists(self.bold_font_path):
+            self.add_font("Roboto", "", self.reg_font_path)
+            self.add_font("Roboto", "B", self.bold_font_path)
+        else:
+            # Šis parādīsies Streamlit logā, ja faili pazuduši
+            st.error(f"Fonti netika atrasti ceļā: {BASE_DIR}")
+
     def header(self):
-        # Ielādējam fontus (Tev tie ir jāpievieno savā mapē!)
-        # Ja faili nav pieejami, šis izmetīs kļūdu, tāpēc pārbaudām
-        try:
-            self.add_font("Roboto", "", "Roboto-Regular.ttf")
-            self.add_font("Roboto", "B", "Roboto-Bold.ttf")
-        except:
-            # Ja fontu faili nav atrasti, lietojam helvetica (bet būs kļūda ar garumzīmēm)
-            self.set_font("helvetica", "B", 15)
-            
-        if os.path.exists("New_logo1.png"):
-            self.image("New_logo1.png", 10, 8, 40)
-            
-        self.set_font("Roboto", "B", 15) # Izmantojam jauno fontu
+        # Logo un virsraksts
+        logo_path = os.path.join(BASE_DIR, "New_logo1.png")
+        if os.path.exists(logo_path):
+            self.image(logo_path, 10, 8, 40)
+        
+        self.set_font("Roboto", "B", 15)
         self.cell(80)
         self.cell(110, 10, "KOMERCIĀLAIS PIEDĀVĀJUMS", border=0, align="R")
         self.ln(20)
 
-    def footer(self):
-        self.set_y(-15)
-        self.set_font("Roboto", "", 8)
-        self.cell(0, 10, f"Lapa {self.page_no()}/{{nb}} | estacija.lv", align="C")
-
 def create_pdf(cust_data, system_data, finance_data):
-    pdf = ESTACIJA_PDF()
-    
-    # Svarīgi pievienot fontus arī šeit pirms add_page vai tūlīt pēc
     try:
-        pdf.add_font("Roboto", "", "Roboto-Regular.ttf")
-        pdf.add_font("Roboto", "B", "Roboto-Bold.ttf")
+        pdf = ESTACIJA_PDF()
+        pdf.add_page()
+        
+        # Pārbaude - vai fonts ir aktīvs
+        pdf.set_font("Roboto", "B", 12)
+        pdf.cell(0, 10, f"Klients: {cust_data['name']}", ln=True)
+        
+        pdf.set_font("Roboto", "", 10)
+        pdf.cell(0, 5, f"Adrese: {cust_data['addr']}", ln=True)
+        pdf.cell(0, 5, f"Piedāvājuma Nr: {cust_data['no']}", ln=True)
+        
+        # ... (pārējā tabulas loģika kā iepriekš) ...
+        
+        return pdf.output() # fpdf2 output() atgriež bytes pēc noklusējuma
     except Exception as e:
-        st.error(f"Sistēma nevarēja atrast fontu failus: {e}. Lūdzu, augšupielādē Roboto-Regular.ttf un Roboto-Bold.ttf")
+        st.error(f"Kļūda ģenerējot PDF: {e}")
         return None
 
     pdf.add_page()
