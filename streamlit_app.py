@@ -1,6 +1,9 @@
 import streamlit as st
 import numpy as np
 from datetime import date
+from fpdf import FPDF
+import base64
+import os
 
 # =================================================================
 # ⚙️ IEKŠĒJIE KONFIGURĀCIJAS PARAMETRI
@@ -21,118 +24,157 @@ PRICING_CONFIG = {
     "large":  {"solar_eur_kw": 600, "bat_eur_kwh": 200}
 }
 
+# --- PDF ĢENERĒŠANAS FUNKCIJA ---
+class ESTACIJA_PDF(FPDF):
+    def header(self):
+        if os.path.exists("New_logo1.png"):
+            self.image("New_logo1.png", 10, 8, 40)
+        self.set_font("helvetica", "B", 15)
+        self.cell(80)
+        self.cell(110, 10, "KOMERCIĀLAIS PIEDĀVĀJUMS", border=0, align="R")
+        self.ln(20)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("helvetica", "I", 8)
+        self.cell(0, 10, f"Lapa {self.page_no()}/{{nb}} | estacija.lv", align="C")
+
+def create_pdf(cust_data, system_data, finance_data):
+    pdf = ESTACIJA_PDF()
+    pdf.add_page()
+    pdf.set_font("helvetica", size=11)
+    
+    # Klienta dati
+    pdf.set_font("helvetica", "B", 12)
+    pdf.cell(0, 10, f"Klients: {cust_data['name']}", ln=True)
+    pdf.set_font("helvetica", size=10)
+    pdf.cell(0, 5, f"Adrese: {cust_data['addr']}", ln=True)
+    pdf.cell(0, 5, f"Piedāvājuma Nr: {cust_data['no']}", ln=True)
+    pdf.cell(0, 5, f"Datums: {date.today().strftime('%d.%m.%Y')}", ln=True)
+    pdf.ln(10)
+
+    # Tabulas galvene
+    pdf.set_fill_color(240, 240, 240)
+    pdf.set_font("helvetica", "B", 10)
+    pdf.cell(90, 10, "Pozicija", border=1, fill=True)
+    pdf.cell(30, 10, "Apjoms", border=1, fill=True, align="C")
+    pdf.cell(30, 10, "Cena (vien.)", border=1, fill=True, align="C")
+    pdf.cell(40, 10, "Summa", border=1, fill=True, align="C")
+    pdf.ln()
+
+    # Pozīcijas
+    pdf.set_font("helvetica", size=10)
+    for item in system_data['items']:
+        pdf.cell(90, 10, item['name'], border=1)
+        pdf.cell(30, 10, item['qty'], border=1, align="C")
+        pdf.cell(30, 10, f"{item['price']} EUR", border=1, align="C")
+        pdf.cell(40, 10, f"{item['total']:,} EUR", border=1, align="C")
+        pdf.ln()
+
+    # Kopsavilkums
+    pdf.ln(5)
+    pdf.set_font("helvetica", "B", 11)
+    pdf.cell(150, 10, "KOPA NETO:", align="R")
+    pdf.cell(40, 10, f"{finance_data['total_neto']:,} EUR", align="R")
+    pdf.ln()
+    pdf.cell(150, 10, f"Valsts atbalsts ({finance_data['grant_pct']}%):", align="R")
+    pdf.cell(40, 10, f"-{finance_data['grant_val']:,} EUR", align="R")
+    pdf.ln()
+    pdf.set_text_color(0, 100, 0)
+    pdf.cell(150, 10, "GALA INVESTICIJA:", align="R")
+    pdf.cell(40, 10, f"{finance_data['final_invest']:,} EUR", align="R")
+    
+    # Kredīta info ja ir
+    if finance_data['pmt'] > 0:
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(15)
+        pdf.set_font("helvetica", "B", 11)
+        pdf.cell(0, 10, "Finansejuma informācija (Kredits):", ln=True)
+        pdf.set_font("helvetica", size=10)
+        pdf.cell(0, 7, f"- Menesa maksajums: {finance_data['pmt']:.2f} EUR", ln=True)
+        pdf.cell(0, 7, f"- Termins: {finance_data['loan_yrs']} gadi", ln=True)
+        pdf.cell(0, 7, f"- Procentu likme: {finance_data['int_rate']*100}%", ln=True)
+
+    return pdf.output(dest='S')
+
+# =================================================================
+# 🖥️ STREAMLIT UI
+# =================================================================
+
 st.set_page_config(page_title="ESTACIJA Piedāvājums & Kredīts", page_icon="📄", layout="wide")
 
-# --- LOGO UN VIRSRAKSTS ---
 st.image("New_logo1.png", width=250)
 st.title("Piedāvājuma un Finanšu Ģenerators")
 
-# --- 1. IEVADES SADAĻA ---
 with st.sidebar:
     st.header("👤 Klienta un Enerģijas dati")
     cust_name = st.text_input("Klients", "SIA Uzņēmums")
+    cust_addr = st.text_input("Adrese", "Rīga, Latvija")
+    offer_no = st.text_input("Piedāvājuma Nr.", "2026-OFF-001")
     bill_in = st.number_input("Pašreizējais mēneša rēķins (€ bez PVN)", min_value=0.0, value=250.0)
-    # Pieņemam vidējo cenu 0.16 EUR/kWh, ja nav norādīts citādi
-    usage_est = bill_in / 0.16 
     
     st.divider()
-    st.header("🏦 Kredīta kalkulators")
-    is_loan = st.checkbox("Iekļaut kredītu piedāvājumā", value=True)
-    int_rate = st.slider("Procentu likme (%)", 1.9, 15.0, 1.9) / 100
-    loan_yrs = st.select_slider("Termiņš (Gadi)", options=list(range(1, 11)), value=5)
+    st.header("🏦 Kredīts")
+    is_loan = st.checkbox("Iekļaut kredītu", value=True)
+    int_rate = st.slider("Likme (%)", 1.9, 15.0, 1.9) / 100
+    loan_yrs = st.select_slider("Gadi", options=list(range(1, 11)), value=5)
 
-# --- 2. SISTĒMAS KONFIGURĀCIJA ---
-st.subheader("🛠️ Sistēmas parametri")
+st.subheader("🛠️ Sistēmas konfigurācija")
 col_s1, col_s2, col_s3 = st.columns(3)
 
 with col_s1:
-    sys_mode = st.selectbox(
-        "Scenārijs",
-        ["Saules paneļi + Baterijas", "Tikai Saules paneļi", "Tikai Baterijas", "Bateriju pievienošana esošai sistēmai"]
-    )
+    sys_mode = st.selectbox("Scenārijs", ["Saules paneļi + Baterijas", "Tikai Saules paneļi", "Tikai Baterijas", "Bateriju pievienošana esošai sistēmai"])
 with col_s2:
-    new_solar = st.number_input("Jaunā Saules jauda (kW)", min_value=0.0, value=10.0)
+    new_solar = st.number_input("Jaunā Saule (kW)", min_value=0.0, value=10.0)
 with col_s3:
-    battery_cap = st.number_input("Bateriju ietilpība (kWh)", min_value=0.0, value=20.0)
+    battery_cap = st.number_input("Baterijas (kWh)", min_value=0.0, value=20.0)
 
-exist_solar = st.number_input("Esošā Saules jauda (kW)", min_value=0.0, value=0.0) if "esošai" in sys_mode else 0.0
-grant_pct = st.slider("Valsts atbalsts (%)", 0, 50, 30) / 100
+exist_solar = st.number_input("Esošā Saule (kW)", min_value=0.0, value=0.0) if "esošai" in sys_mode else 0.0
+grant_pct_val = st.slider("Valsts atbalsts (%)", 0, 50, 30)
 
-# --- 3. APRĒĶINU LOĢIKA ---
-# Investīcija
+# --- APRĒĶINI ---
 tier_kw = new_solar if new_solar > 0 else (battery_cap / 2)
 tier = "small" if tier_kw < 20 else ("medium" if tier_kw < 50 else "large")
+s_u = PRICING_CONFIG[tier]["solar_eur_kw"]
+b_u = PRICING_CONFIG[tier]["bat_eur_kwh"]
 
-inv_total = (new_solar * PRICING_CONFIG[tier]["solar_eur_kw"]) + (battery_cap * PRICING_CONFIG[tier]["bat_eur_kwh"])
-net_invest = inv_total * (1 - grant_pct)
+inv_solar = new_solar * s_u
+inv_bat = battery_cap * b_u
+total_neto = inv_solar + inv_bat
+grant_amount = total_neto * (grant_pct_val / 100)
+net_invest = total_neto - grant_amount
 
-# Kredīta maksājums (Anuitāte)
-# Formula: $PMT = L \cdot \frac{i(1+i)^n}{(1+i)^n-1}$
+# Kredīts
+pmt = 0
 if is_loan:
-    m_rate = int_rate / 12
-    m_count = loan_yrs * 12
-    pmt = net_invest * (m_rate * (1+m_rate)**m_count) / ((1+m_rate)**m_count - 1)
-else:
-    pmt = 0
+    m_r = int_rate / 12
+    m_c = loan_yrs * 12
+    pmt = net_invest * (m_r * (1+m_r)**m_c) / ((1+m_r)**m_c - 1)
 
 # Ietaupījums
-total_kw = new_solar + exist_solar
-ann_save = (total_kw * 1050 * (0.16 + 0.045)) + (battery_cap * 300 * 0.10 * 0.88)
-m_save = ann_save / 12
+m_save = ((new_solar + exist_solar) * 1050 * (0.16 + 0.045) + battery_cap * 300 * 0.10 * 0.88) / 12
 
-# --- 4. REZULTĀTU CILNES ---
-tab1, tab2, tab3 = st.tabs(["📋 Piedāvājums", "📊 Rēķinu salīdzinājums", "📈 ROI Grafiks"])
+# --- UI ATTĒLOŠANA ---
+tab1, tab2 = st.tabs(["📋 Piedāvājums un ROI", "📉 Rēķinu piemērs"])
 
 with tab1:
-    st.markdown(f"### Piedāvājums: {cust_name}")
-    st.write(f"Sistēma: {new_solar}kW Saule + {battery_cap}kWh Baterijas")
-    st.divider()
     c1, c2, c3 = st.columns(3)
-    c1.metric("Investīcija (Neto)", f"{net_invest:,.0f} €")
+    c1.metric("Investīcija", f"{net_invest:,.0f} €")
     c2.metric("Mēneša ietaupījums", f"{m_save:,.2f} €")
-    if is_loan:
-        c3.metric("Kredīta maksājums", f"{pmt:,.2f} €")
-    
-    st.success(f"**Tīrais mēneša ieguvums (Cash-flow): {m_save - pmt:,.2f} €**")
+    c3.metric("Mēneša Cash-flow", f"{m_save - pmt:,.2f} €")
 
-with tab2:
-    st.subheader("Mēneša izmaksu piemērs")
-    st.write("Salīdzinājums starp pašreizējo situāciju un modeli pēc sistēmas uzstādīšanas.")
-    
-    col_v1, col_v2 = st.columns(2)
-    with col_v1:
-        st.error("📉 ŠOBRĪD (Bez sistēmas)")
-        st.write(f"Mēneša rēķins: **{bill_in:,.2f} €**")
-        st.write("Kredīta maksājums: 0.00 €")
-        st.write("---")
-        st.write(f"**KOPĀ: {bill_in:,.2f} €**")
-        
-    with col_v2:
-        st.success("🚀 AR ESTACIJA SISTĒMU")
-        new_bill = max(0, bill_in - m_save)
-        st.write(f"Jaunais rēķins (provizoriski): **{new_bill:,.2f} €**")
-        st.write(f"Kredīta maksājums: **{pmt:,.2f} €**")
-        st.write("---")
-        st.write(f"**KOPĀ: {new_bill + pmt:,.2f} €**")
-    
-    diff = bill_in - (new_bill + pmt)
-    st.info(f"💡 **Secinājums:** Klients katru mēnesi ietaupa **{diff:,.2f} €**, pat maksājot kredītu!")
+    # PDF Poga
+    sys_items = []
+    if new_solar > 0: sys_items.append({'name': 'Saules panelu sistema', 'qty': f'{new_solar} kW', 'price': s_u, 'total': inv_solar})
+    if battery_cap > 0: sys_items.append({'name': 'Akumulatoru kratuve', 'qty': f'{battery_cap} kWh', 'price': b_u, 'total': inv_bat})
 
-with tab3:
-    st.subheader("Kumulatīvā naudas plūsma (20 gadi)")
-    cash_flows = []
-    balance = -net_invest if not is_loan else 0 # Ja ir kredīts, sākam no 0, bet rēķinām CF
-    
-    curr_bal = -net_invest if not is_loan else 0
-    for y in range(21):
-        if y > 0:
-            y_save = ann_save * ((1.03)**y)
-            y_loan = (pmt * 12) if (is_loan and y <= loan_yrs) else 0
-            curr_bal += (y_save - y_loan)
-        cash_flows.append(curr_bal)
-    
-    st.area_chart(cash_flows)
-    
+    pdf_bytes = create_pdf(
+        {'name': cust_name, 'addr': cust_addr, 'no': offer_no},
+        {'items': sys_items},
+        {'total_neto': total_neto, 'grant_pct': grant_pct_val, 'grant_val': grant_amount, 'final_invest': net_invest, 'pmt': pmt, 'loan_yrs': loan_yrs, 'int_rate': int_rate}
+    )
 
-st.markdown("---")
-st.caption(f"Piedāvājums Nr. {date.today().strftime('%Y%m%d')}-1. Finanšu aprēķinam ir informatīvs raksturs.")
+    st.download_button(
+        label="📥 Lejupielādēt PDF piedāvājumu",
+        data=pdf_bytes,
+        file_name=f"ESTACIJA_Piedavajums_{cust_name.
