@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 from datetime import date
-from fpdf2 import FPDF
+from fpdf import FPDF
 import base64
 import os
 
