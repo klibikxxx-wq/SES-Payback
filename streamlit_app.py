@@ -177,4 +177,16 @@ with tab1:
     st.download_button(
         label="📥 Lejupielādēt PDF piedāvājumu",
         data=pdf_bytes,
-        file_name=f"ESTACIJA_Piedavajums_{cust_name.
+        file_name=f"ESTACIJA_Piedavajums_{cust_name.replace(' ', '_')}.pdf",
+        mime="application/pdf"
+    )
+
+with tab2:
+    st.subheader("Mēneša izmaksu salīdzinājums")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.error(f"ŠOBRĪD: {bill_in:,.2f} €/mēn")
+    with col_b:
+        new_bill = max(0, bill_in - m_save)
+        st.success(f"AR SISTĒMU: {new_bill + pmt:,.2f} €/mēn")
+        st.write(f"(Rēķins: {new_bill:,.2f} € + Kredīts: {pmt:,.2f} €)")
