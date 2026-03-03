@@ -1,21 +1,20 @@
 import streamlit as st
 import numpy as np
+import os
 from datetime import date
 from fpdf import FPDF
-import base64
-import os
 
 # =================================================================
-# ⚙️ IEKŠĒJIE KONFIGURĀCIJAS PARAMETRI
+# ⚙️ 1. KONFIGURĀCIJA UN CENAS
 # =================================================================
 TECHNICAL_PARAMS = {
-    "solar_yield": 1050,
-    "grid_fee_save": 0.045,
-    "bat_cycles": 300,
-    "arb_spread": 0.10,
-    "bat_eff": 0.88,
-    "degradation": 0.005,
-    "elec_inflation": 0.03
+    "solar_yield": 1050,      # kWh/kWp gadā
+    "grid_fee_save": 0.045,   # €/kWh (Sadales tīkls)
+    "bat_cycles": 300,        # Cikli gadā
+    "arb_spread": 0.10,       # €/kWh starpība
+    "bat_eff": 0.88,          # Baterijas lietderība
+    "degradation": 0.005,     # 0.5% gadā
+    "elec_inflation": 0.03    # 3% gadā
 }
 
 PRICING_CONFIG = {
@@ -24,184 +23,199 @@ PRICING_CONFIG = {
     "large":  {"solar_eur_kw": 600, "bat_eur_kwh": 200}
 }
 
-# --- PDF ĢENERĒŠANAS FUNKCIJA AR LATVIEŠU VALODAS ATBALSTU ---
-class ESTACIJA_PDF(FPDF):
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# =================================================================
+# 📄 2. PDF KLASES DEFINĪCIJA (Latviešu valodas atbalsts)
+# =================================================================
+class EstacijaPDF(FPDF):
     def __init__(self):
         super().__init__()
-        # Pievienojam fontus uzreiz pie inicializācijas
-        self.reg_font_path = os.path.join(BASE_DIR, "Roboto-Regular.ttf")
-        self.bold_font_path = os.path.join(BASE_DIR, "Roboto-Bold.ttf")
+        # Mēģinām ielādēt fontus no tās pašas mapes
+        reg_path = os.path.join(BASE_DIR, "Roboto-Regular.ttf")
+        bold_path = os.path.join(BASE_DIR, "Roboto-Bold.ttf")
         
-        # Pārbaudām vai faili eksistē pirms pievienošanas
-        if os.path.exists(self.reg_font_path) and os.path.exists(self.bold_font_path):
-            self.add_font("Roboto", "", self.reg_font_path)
-            self.add_font("Roboto", "B", self.bold_font_path)
+        if os.path.exists(reg_path) and os.path.exists(bold_path):
+            self.add_font("Roboto", "", reg_path)
+            self.add_font("Roboto", "B", bold_path)
+            self.font_family_name = "Roboto"
         else:
-            # Šis parādīsies Streamlit logā, ja faili pazuduši
-            st.error(f"Fonti netika atrasti ceļā: {BASE_DIR}")
+            self.font_family_name = "helvetica" # Rezerves variants (bez LV zīmēm)
 
     def header(self):
-        # Logo un virsraksts
         logo_path = os.path.join(BASE_DIR, "New_logo1.png")
         if os.path.exists(logo_path):
-            self.image(logo_path, 10, 8, 40)
-        
-        self.set_font("Roboto", "B", 15)
-        self.cell(80)
-        self.cell(110, 10, "KOMERCIĀLAIS PIEDĀVĀJUMS", border=0, align="R")
+            self.image(logo_path, 10, 8, 35)
+        self.set_font(self.font_family_name, "B", 14)
+        self.cell(0, 10, "KOMERCIĀLAIS PIEDĀVĀJUMS", border=0, align="R")
         self.ln(20)
 
-def create_pdf(cust_data, system_data, finance_data):
-    try:
-        pdf = ESTACIJA_PDF()
-        pdf.add_page()
-        
-        # Pārbaude - vai fonts ir aktīvs
-        pdf.set_font("Roboto", "B", 12)
-        pdf.cell(0, 10, f"Klients: {cust_data['name']}", ln=True)
-        
-        pdf.set_font("Roboto", "", 10)
-        pdf.cell(0, 5, f"Adrese: {cust_data['addr']}", ln=True)
-        pdf.cell(0, 5, f"Piedāvājuma Nr: {cust_data['no']}", ln=True)
-        
-        # ... (pārējā tabulas loģika kā iepriekš) ...
-        
-        return pdf.output() # fpdf2 output() atgriež bytes pēc noklusējuma
-    except Exception as e:
-        st.error(f"Kļūda ģenerējot PDF: {e}")
-        return None
-
-    pdf.add_page()
-    pdf.set_font("Roboto", size=11)
-    
-    # Klienta dati
-    pdf.set_font("Roboto", "B", 12)
-    pdf.cell(0, 10, f"Klients: {cust_data['name']}", ln=True)
-    pdf.set_font("Roboto", size=10)
-    pdf.cell(0, 5, f"Adrese: {cust_data['addr']}", ln=True)
-    pdf.cell(0, 5, f"Piedāvājuma Nr: {cust_data['no']}", ln=True)
-    pdf.cell(0, 5, f"Datums: {date.today().strftime('%d.%m.%Y')}", ln=True)
-    pdf.ln(10)
-
-    # Tabulas galvene
-    pdf.set_fill_color(240, 240, 240)
-    pdf.set_font("Roboto", "B", 10)
-    pdf.cell(90, 10, "Pozīcija", border=1, fill=True) # Tagad drīkst rakstīt 'ī'
-    pdf.cell(30, 10, "Apjoms", border=1, fill=True, align="C")
-    pdf.cell(30, 10, "Cena (vien.)", border=1, fill=True, align="C")
-    pdf.cell(40, 10, "Summa", border=1, fill=True, align="C")
-    pdf.ln()
-
-    # Pozīcijas
-    pdf.set_font("Roboto", size=10)
-    for item in system_data['items']:
-        # Izmantojam UTF-8 drošu rakstību
-        pdf.cell(90, 10, item['name'], border=1)
-        pdf.cell(30, 10, item['qty'], border=1, align="C")
-        pdf.cell(30, 10, f"{item['price']} EUR", border=1, align="C")
-        pdf.cell(40, 10, f"{item['total']:,} EUR", border=1, align="C")
-        pdf.ln()
-
-    # ... pārējā koda daļa paliek tāda pati, tikai nomaini "helvetica" uz "Roboto" ...
-    
-    # Kopsavilkums
-    pdf.ln(5)
-    pdf.set_font("Roboto", "B", 11)
-    pdf.cell(150, 10, "KOPĀ NETO:", align="R")
-    pdf.cell(40, 10, f"{finance_data['total_neto']:,} EUR", align="R")
-    
-    return pdf.output(dest='S')
+    def footer(self):
+        self.set_y(-15)
+        self.set_font(self.font_family_name, "", 8)
+        self.cell(0, 10, f"Lapa {self.page_no()}/{{nb}} | estacija.lv", align="C")
 
 # =================================================================
-# 🖥️ STREAMLIT UI
+# 🖥️ 3. STREAMLIT LIETOTNES SASKARNE
 # =================================================================
+st.set_page_config(page_title="ESTACIJA Piedāvājumu Sistēma", layout="wide")
 
-st.set_page_config(page_title="ESTACIJA Piedāvājums & Kredīts", page_icon="📄", layout="wide")
+# Logo attēlošana UI
+logo_ui = os.path.join(BASE_DIR, "New_logo1.png")
+if os.path.exists(logo_ui):
+    st.image(logo_ui, width=200)
 
-st.image("New_logo1.png", width=250)
-st.title("Piedāvājuma un Finanšu Ģenerators")
+st.title("Saules un Bateriju Sistēmu Piedāvājumu Ģenerators")
 
+# --- IEVADES DATI ---
 with st.sidebar:
-    st.header("👤 Klienta un Enerģijas dati")
-    cust_name = st.text_input("Klients", "SIA Uzņēmums")
-    cust_addr = st.text_input("Adrese", "Rīga, Latvija")
-    offer_no = st.text_input("Piedāvājuma Nr.", "2026-OFF-001")
-    bill_in = st.number_input("Pašreizējais mēneša rēķins (€ bez PVN)", min_value=0.0, value=250.0)
+    st.header("👤 Klienta dati")
+    c_name = st.text_input("Klients", "SIA Klienta Uzņēmums")
+    c_addr = st.text_input("Adrese", "Rīga, Latvija")
+    c_bill = st.number_input("Esošais mēneša rēķins (€ bez PVN)", value=300.0)
     
     st.divider()
-    st.header("🏦 Kredīts")
+    st.header("🏦 Finansējums")
     is_loan = st.checkbox("Iekļaut kredītu", value=True)
-    int_rate = st.slider("Likme (%)", 1.9, 15.0, 1.9) / 100
-    loan_yrs = st.select_slider("Gadi", options=list(range(1, 11)), value=5)
+    loan_rate = st.slider("Likme (%)", 1.9, 12.0, 1.9) / 100
+    loan_years = st.select_slider("Termiņš (Gadi)", options=list(range(1, 11)), value=5)
+    grant_pct = st.slider("Valsts atbalsts (%)", 0, 50, 30) / 100
 
-st.subheader("🛠️ Sistēmas konfigurācija")
-col_s1, col_s2, col_s3 = st.columns(3)
+st.subheader("🛠️ Sistēmas Konfigurācija")
+col1, col2, col3 = st.columns(3)
 
-with col_s1:
-    sys_mode = st.selectbox("Scenārijs", ["Saules paneļi + Baterijas", "Tikai Saules paneļi", "Tikai Baterijas", "Bateriju pievienošana esošai sistēmai"])
-with col_s2:
-    new_solar = st.number_input("Jaunā Saule (kW)", min_value=0.0, value=10.0)
-with col_s3:
-    battery_cap = st.number_input("Baterijas (kWh)", min_value=0.0, value=20.0)
+with col1:
+    scenario = st.selectbox("Scenārijs", [
+        "Saules paneļi + Baterijas", 
+        "Tikai Saules paneļi", 
+        "Tikai Baterijas", 
+        "Bateriju pievienošana esošai sistēmai"
+    ])
+with col2:
+    new_kw = st.number_input("Jaunā Saules jauda (kW)", min_value=0.0, value=10.0 if "Saules" in scenario else 0.0)
+    exist_kw = st.number_input("Esošā Saules jauda (kW)", min_value=0.0, value=0.0) if "esošai" in scenario else 0.0
+with col3:
+    bat_kwh = st.number_input("Bateriju ietilpība (kWh)", min_value=0.0, value=20.0 if "Baterija" in scenario or "Bateriju" in scenario else 0.0)
 
-exist_solar = st.number_input("Esošā Saule (kW)", min_value=0.0, value=0.0) if "esošai" in sys_mode else 0.0
-grant_pct_val = st.slider("Valsts atbalsts (%)", 0, 50, 30)
+# =================================================================
+# 🧮 4. APRĒĶINU MOTORS
+# =================================================================
+# Cenu līmeņa noteikšana
+calc_tier_kw = new_kw if new_kw > 0 else (bat_kwh / 2)
+if calc_tier_kw < PRICING_CONFIG["small"]["max_kw"]: tier = "small"
+elif calc_tier_kw < PRICING_CONFIG["medium"]["max_kw"]: tier = "medium"
+else: tier = "large"
 
-# --- APRĒĶINI ---
-tier_kw = new_solar if new_solar > 0 else (battery_cap / 2)
-tier = "small" if tier_kw < 20 else ("medium" if tier_kw < 50 else "large")
 s_u = PRICING_CONFIG[tier]["solar_eur_kw"]
 b_u = PRICING_CONFIG[tier]["bat_eur_kwh"]
 
-inv_solar = new_solar * s_u
-inv_bat = battery_cap * b_u
-total_neto = inv_solar + inv_bat
-grant_amount = total_neto * (grant_pct_val / 100)
-net_invest = total_neto - grant_amount
-
-# Kredīts
-pmt = 0
-if is_loan:
-    m_r = int_rate / 12
-    m_c = loan_yrs * 12
-    pmt = net_invest * (m_r * (1+m_r)**m_c) / ((1+m_r)**m_c - 1)
+# Investīcija
+inv_s = new_kw * s_u
+inv_b = bat_kwh * b_u
+total_neto = inv_s + inv_b
+grant_val = total_neto * grant_pct
+net_invest = total_neto - grant_val
 
 # Ietaupījums
-m_save = ((new_solar + exist_solar) * 1050 * (0.16 + 0.045) + battery_cap * 300 * 0.10 * 0.88) / 12
+total_active_kw = new_kw + exist_kw
+save_solar = (total_active_kw * TECHNICAL_PARAMS["solar_yield"]) * (0.16 + TECHNICAL_PARAMS["grid_fee_save"])
+save_bat = (bat_kwh * TECHNICAL_PARAMS["bat_cycles"] * TECHNICAL_PARAMS["arb_spread"] * TECHNICAL_PARAMS["bat_eff"])
+monthly_save = (save_solar + save_bat) / 12
 
-# --- UI ATTĒLOŠANA ---
-tab1, tab2 = st.tabs(["📋 Piedāvājums un ROI", "📉 Rēķinu piemērs"])
+# Kredīta PMT formula
+pmt = 0
+if is_loan and net_invest > 0:
+    r = loan_rate / 12
+    n = loan_years * 12
+    pmt = net_invest * (r * (1+r)**n) / ((1+r)**n - 1)
 
-with tab1:
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Investīcija", f"{net_invest:,.0f} €")
-    c2.metric("Mēneša ietaupījums", f"{m_save:,.2f} €")
-    c3.metric("Mēneša Cash-flow", f"{m_save - pmt:,.2f} €")
+# =================================================================
+# 📊 5. REZULTĀTU ATTĒLOŠANA
+# =================================================================
+t1, t2, t3 = st.tabs(["📋 Piedāvājums", "⚖️ Rēķinu salīdzinājums", "📈 ROI Grafiks"])
 
-    # PDF Poga
-    sys_items = []
-    if new_solar > 0: sys_items.append({'name': 'Saules panelu sistema', 'qty': f'{new_solar} kW', 'price': s_u, 'total': inv_solar})
-    if battery_cap > 0: sys_items.append({'name': 'Akumulatoru kratuve', 'qty': f'{battery_cap} kWh', 'price': b_u, 'total': inv_bat})
+with t1:
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Gala investīcija", f"{net_invest:,.0f} €")
+    m2.metric("Mēneša ietaupījums", f"{monthly_save:,.2f} €")
+    m3.metric("Mēneša Cash-flow", f"{monthly_save - pmt:,.2f} €")
 
-    pdf_bytes = create_pdf(
-        {'name': cust_name, 'addr': cust_addr, 'no': offer_no},
-        {'items': sys_items},
-        {'total_neto': total_neto, 'grant_pct': grant_pct_val, 'grant_val': grant_amount, 'final_invest': net_invest, 'pmt': pmt, 'loan_yrs': loan_yrs, 'int_rate': int_rate}
-    )
+    # PDF Ģenerēšanas poga
+    def generate_pdf_bytes():
+        pdf = EstacijaPDF()
+        pdf.add_page()
+        pdf.set_font(pdf.font_family_name, "B", 12)
+        pdf.cell(0, 10, f"Klients: {c_name}", ln=True)
+        pdf.set_font(pdf.font_family_name, "", 10)
+        pdf.cell(0, 5, f"Objekta adrese: {c_addr}", ln=True)
+        pdf.cell(0, 5, f"Datums: {date.today().strftime('%d.%m.%Y')}", ln=True)
+        pdf.ln(10)
 
-    st.download_button(
-        label="📥 Lejupielādēt PDF piedāvājumu",
-        data=pdf_bytes,
-        file_name=f"ESTACIJA_Piedavajums_{cust_name.replace(' ', '_')}.pdf",
-        mime="application/pdf"
-    )
+        # Tabula
+        pdf.set_fill_color(230, 230, 230)
+        pdf.set_font(pdf.font_family_name, "B", 10)
+        pdf.cell(85, 10, "Pozīcija", 1, 0, "L", True)
+        pdf.cell(35, 10, "Apjoms", 1, 0, "C", True)
+        pdf.cell(35, 10, "Cena (vien.)", 1, 0, "C", True)
+        pdf.cell(35, 10, "Summa", 1, 1, "C", True)
+        
+        pdf.set_font(pdf.font_family_name, "", 10)
+        if new_kw > 0:
+            pdf.cell(85, 10, "Saules paneļu sistēmas uzstādīšana", 1)
+            pdf.cell(35, 10, f"{new_kw} kW", 1, 0, "C")
+            pdf.cell(35, 10, f"{s_u} €", 1, 0, "C")
+            pdf.cell(35, 10, f"{inv_s:,.2f} €", 1, 1, "C")
+        if bat_kwh > 0:
+            pdf.cell(85, 10, "Bateriju krātuves uzstādīšana (LFP)", 1)
+            pdf.cell(35, 10, f"{bat_kwh} kWh", 1, 0, "C")
+            pdf.cell(35, 10, f"{b_u} €", 1, 0, "C")
+            pdf.cell(35, 10, f"{inv_b:,.2f} €", 1, 1, "C")
 
-with tab2:
-    st.subheader("Mēneša izmaksu salīdzinājums")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.error(f"ŠOBRĪD: {bill_in:,.2f} €/mēn")
-    with col_b:
-        new_bill = max(0, bill_in - m_save)
-        st.success(f"AR SISTĒMU: {new_bill + pmt:,.2f} €/mēn")
-        st.write(f"(Rēķins: {new_bill:,.2f} € + Kredīts: {pmt:,.2f} €)")
+        pdf.ln(5)
+        pdf.set_font(pdf.font_family_name, "B", 11)
+        pdf.cell(155, 8, "KOPĀ NETO:", 0, 0, "R")
+        pdf.cell(35, 8, f"{total_neto:,.2f} €", 0, 1, "R")
+        pdf.cell(155, 8, f"Valsts atbalsts ({int(grant_pct*100)}%):", 0, 0, "R")
+        pdf.cell(35, 8, f"-{grant_val:,.2f} €", 0, 1, "R")
+        pdf.set_text_color(34, 139, 34)
+        pdf.cell(155, 10, "GALA INVESTĪCIJA:", 0, 0, "R")
+        pdf.cell(35, 10, f"{net_invest:,.2f} €", 0, 1, "R")
+        
+        return pdf.output()
+
+    if st.button("Sagatavot PDF failu"):
+        pdf_data = generate_pdf_bytes()
+        st.download_button(
+            label="📥 Lejupielādēt PDF",
+            data=bytes(pdf_data),
+            file_name=f"Estacija_Piedavajums_{c_name.replace(' ', '_')}.pdf",
+            mime="application/pdf"
+        )
+
+with t2:
+    st.subheader("Mēneša izmaksu piemērs ar sistēmu")
+    c_now, c_future = st.columns(2)
+    with c_now:
+        st.error(f"ŠOBRĪD: {c_bill:,.2f} € / mēn")
+        st.caption("Tikai elektrības rēķins")
+    with c_future:
+        new_bill = max(0, c_bill - monthly_save)
+        st.success(f"NĀKOTNĒ: {new_bill + pmt:,.2f} € / mēn")
+        st.caption(f"Rēķins: {new_bill:,.2f} € + Kredīts: {pmt:,.2f} €")
+    
+    st.info(f"Klients katru mēnesi ietaupa **{c_bill - (new_bill + pmt):,.2f} €** no savas naudas plūsmas.")
+
+with t3:
+    st.subheader("Kumulatīvā naudas plūsma (20 gadi)")
+    balance = -net_invest if not is_loan else 0
+    history = []
+    for y in range(21):
+        if y > 0:
+            y_save = (monthly_save * 12) * ((1 + TECHNICAL_PARAMS["elec_inflation"])**y) * ((1 - TECHNICAL_PARAMS["degradation"])**y)
+            y_loan = (pmt * 12) if (is_loan and y <= loan_years) else 0
+            balance += (y_save - y_loan)
+        history.append(balance)
+    
+    st.area_chart(history)
+    
+    st.write(f"Sistēmas tīrā peļņa 20 gadu laikā: **{history[-1]:,.0f} €**")
